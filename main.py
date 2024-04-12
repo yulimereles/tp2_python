@@ -1,86 +1,72 @@
-import os
 import csv
-import MySQLdb
+import pathlib
+from conexion import db_connection
+from crear_tabla import crear_tabla
+from leer_localidades import obtener_localidades
+from insertar_tablas import insertar_localidad
+from leer_base_data import obtener_provincias, seleccionar_por_provincia
 
-# Función para leer el archivo CSV y devolver una lista de filas.
-def read_csv(file_path):
-    try:
-        with open(file_path, newline='') as archivo_csv:
-            lector_csv = csv.reader(archivo_csv, delimiter=',', quotechar='"')
-            return list(lector_csv)
-    except FileNotFoundError as e:
-        print(f'No se encontró el archivo. Error: {e}')
-        return []
+archivo_csv = "localidades.csv"
 
-# Función para conectarse a la base de datos MySQL.
-def connect_db(host, user, password, database):
-    try:
-        db = MySQLdb.connect(host, user, password, database)
-        print("Conexión a la base de datos exitosa.")
-        return db
-    except MySQLdb.Error as e:
-        print("No se pudo conectar a la base de datos:", e)
-        return None
+def formatear_nombre_archivo_csv(provincia):
+    provincia = provincia.lower().replace(" ", "-")
+    return f"{provincia}.csv"
 
-# Función para crear la tabla en la base de datos e insertar datos desde el CSV.
-def create_table_and_insert_data(db, table_name, csv_data):
-    if db is None:
-        print("Error: No se ha establecido conexión a la base de datos.")
-        return
+def escribir_archivo_csv(archivo_csv, provincias):
+    pathlib.Path(__file__).parent.joinpath("provincias", "localidades").mkdir(parents=True, exist_ok=True)
+    path = pathlib.Path(__file__).parent.joinpath("provincias", "localidades", archivo_csv)
+    with open(path, "w", newline="", encoding="utf-8") as archivo:
+        escritor = csv.writer(archivo)
+        escritor.writerows(provincias)
+    return path
 
-    try:
-        cursor = db.cursor()
-        cursor.execute(f"DROP TABLE IF EXISTS {table_name}")
-        cursor.execute(f"CREATE TABLE IF NOT EXISTS {table_name} ( provincia VARCHAR(200), id INT, localidad VARCHAR(255), cp VARCHAR(255), id_prov_mstr VARCHAR(200))")
+def main():
+    # Se crea la conexión a la base de datos
+    conn = db_connection()
+    
+    # Se crea la tabla para almacenar los datos
+    crear_tabla(conn)
+    
+    # Se obtiene la ruta del archivo CSV
+    ruta = pathlib.Path(__file__).parent.joinpath("provincias", archivo_csv)
+    
+    # Se obtienen las localidades del archivo CSV
+    filas = obtener_localidades(ruta)
+    
+    # Se verifica si la primera fila es el encabezado y se omite
+    if filas and filas[0][0].lower() == 'id':
+        filas = filas[1:]
+    
+    # Se preparan los datos para insertar en la base de datos
+    valores = []
+    for fila in filas:
+        # Se define una función auxiliar para verificar si el valor es numérico
+        def convertir_a_entero(valor):
+            try:
+                return int(valor)
+            except ValueError:
+                return 0
         
-        for row in csv_data:
-            cursor.execute(f"INSERT INTO {table_name} (provincia, id, localidad, cp, id_prov_mstr) VALUES (%s, %s, %s, %s, %s)", row)
+        # Se prepara la fila para la inserción, utilizando la función auxiliar
+        una_fila = (str(fila[0]), convertir_a_entero(fila[1]), str(fila[2]), convertir_a_entero(fila[3]), convertir_a_entero(fila[4]))
+        valores.append(una_fila)
+    
+    # Se insertan los datos en la base de datos
+    insertar_localidad(conn, valores)
+    
+    # Se obtiene una lista de las provincias
+    provincias = obtener_provincias(conn)
+    
+    # Se obtienen todas las localidades por provincias
+    for provincia in provincias:
+        nombre_archivo = formatear_nombre_archivo_csv(provincia)
+        resultado = seleccionar_por_provincia(conn, provincia)
         
-        db.commit()
-        print("Tabla creada e datos insertados correctamente.")
-    except MySQLdb.Error as e:
-        print("Error al crear la tabla o insertar datos:", e)
-
-# Función para agrupar y exportar datos por provincia.
-def group_and_export_data(db, table_name, output_folder):
-    if db is None:
-        print("Error: No se ha establecido conexión a la base de datos.")
-        return
-
-    try:
-        cursor = db.cursor()
-        cursor.execute(f"SELECT DISTINCT provincia FROM {table_name}")
-        provincias = cursor.fetchall()
-        
-        for provincia in provincias:
-            cursor.execute(f"SELECT * FROM {table_name} WHERE provincia = %s", (provincia[0],))
-            rows = cursor.fetchall()
-            
-            with open(os.path.join(output_folder, f'{provincia[0]}.csv'), 'w', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerows(rows)
-        
-        print('Agrupación y exportación exitosa.')
-    except MySQLdb.Error as e:
-        print('Error al agrupar y exportar. Error:', e)
-
-# Ejemplo de uso de las funciones:
+        # Se crea y escribe el archivo CSV
+        escribir_archivo_csv(nombre_archivo, resultado)
+    
+    # Se cierra la conexión a la base de datos
+    conn.close()
+    
 if __name__ == "__main__":
-    # Leer el archivo CSV
-    csv_file = 'localidades.csv'
-    csv_data = read_csv(csv_file)
-
-    # Conectar a la base de datos
-    db = connect_db("localhost", "root", "", "provincias")
-
-    # Crear la tabla y insertar datos desde el CSV
-    if db is not None:
-        create_table_and_insert_data(db, "localidades", csv_data)
-
-    # Agrupar y exportar datos por provincia
-    output_folder = 'Provincias_csv'
-    group_and_export_data(db, "localidades", output_folder)
-
-    # Cerrar la conexión a la base de datos
-    if db is not None:
-        db.close()
+    main()
